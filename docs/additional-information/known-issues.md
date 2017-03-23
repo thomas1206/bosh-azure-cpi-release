@@ -29,11 +29,6 @@
 
       ```
       director:
-        address: 127.0.0.1
-        name: bosh
-        db: *db
-        cpi_job: cpi
-        enable_snapshots: true
         debug:
           keep_unreachable_vms: true
       ```
@@ -53,22 +48,7 @@
 
     6. If the deployment failed, the unreachable VMs will be kept for further investigations.
 
-2. "NicInUse" error when deleting the network interfaces
-
-  ```
-  D, [2015-08-27 05:36:41#44885] [] DEBUG -- DirectorJobRunner: Worker thread raised exception: Unknown CPI error 'Bosh::AzureCloud::AzureError' with message 'http_delete - error: 400 message: 
-  {
-      "error": {
-          "code": "NicInUse",
-          "message": "Network Interface /subscriptions/87654321-1234-5678-1234-678912345678/resourceGroups/abel-beta/providers/Microsoft.Network/networkInterfaces/dc0d3a9a-0b00-40d8-830d-41e6f4ac9809 is used by existing VM /subscriptions/87654321-1234-5678-1234-678912345678/resourceGroups/abel-beta/providers/Microsoft.Compute/virtualMachines/dc0d3a9a-0b00-40d8-830d-41e6f4ac9809.",
-          "details": []
-      }
-  }
-  ```
-
-  If you hits the similar issue, you can retry the same command manually. If it does not work, you can file a support ticket. Please refer to https://azure.microsoft.com/en-us/support/options/ and https://azure.microsoft.com/en-us/support/faq/.
-
-3. Connection dropped
+2. Connection dropped
 
   By default, Azure load balancer has an `idle timeout` setting of 4 minutes but the default timeout of HAProxy is 900 as 15 minutes, this would cause the problem of connection dropped. [#99](https://github.com/cloudfoundry-incubator/bosh-azure-cpi-release/issues/99)
 
@@ -91,3 +71,64 @@
     ```
     request_timeout_in_seconds: 180
     ```
+
+3. Limits of Premium Storage blob snapshots
+
+  The BOSH snapshot operation may be throttled if you do all of the following:
+
+  * Use Premium Storage for the Cloud Foundry VMs.
+
+  * Enable snapshot in `bosh.yml`. For more information on BOSH Snapshots, please go to https://bosh.io/docs/snapshots.html.
+
+    ```
+    director:
+      enable_snapshots: true
+    ```
+
+  * The time between consecutive snapshots by BOSH is less than **10 minutes**. The limits are documented in [Snapshots and Copy Blob for Premium Storage](https://azure.microsoft.com/en-us/documentation/articles/storage-premium-storage/#snapshots-and-copy-blob). 
+
+  The workaround is:
+
+  * Disable snapshot temporarily.
+
+    ```
+    director:
+      enable_snapshots: false
+    ```
+
+  * Adjust the snapshot interval to more than 10 minutes.
+
+4. Version mismatch between CPI and Stemcell
+
+  For CPI v11 or later, the compatible stemcell version is v3181 or later. If the stemcell version is older than v3181, you may hit the following failure when deploying BOSH.
+
+  ```
+  Command 'deploy' failed:
+    Deploying:
+      Creating instance 'bosh/0':
+        Waiting until instance is ready:
+          Sending ping to the agent:
+            Performing request to agent endpoint 'https://mbus-user:mbus-password@10.0.0.4:6868/agent':
+              Performing POST request:
+                Post https://mbus-user:mbus-password@10.0.0.4:6868/agent: dial tcp 10.0.0.4:6868: getsockopt: connection refused
+  ```
+
+  It is recommended to use the latest version. For example, Stemcell v3232.5 or later, and CPI v12 or later. You may hit the issue [#135](https://github.com/cloudfoundry-incubator/bosh-azure-cpi-release/issues/135) if you still use an older stemcell than v3232.5.
+
+5. Invalid or expired service principal
+
+  ```
+  http_get_response - get_token - http error: 400
+  ```
+
+  Service principal is most likely invalid. Verify that client ID, client secret and tenant ID successfully work with the [steps](../get-started/create-service-principal.md#verify-your-service-principal).
+
+  If your service principal worked and you get the above error suddenly, it may be caused by that your service principal expired. You need to go to Azure Portal to update client secret. By default, the service principal will expire in one year.
+
+  1. Go to [Azure Portal](https://manage.windowsazure.com/), select `active directory` -- > ORGANIZATION-NAME -- > `Applications` -- > search your service principal name.
+
+  ![Service Principal on Azure Portal](./service-principal-on-portal.png)
+
+  2. Then choose your service principal, select `Configure` -- > `keys` -- > add a new key.
+
+  ![Add the Client Secret](./add-client-secret.png)

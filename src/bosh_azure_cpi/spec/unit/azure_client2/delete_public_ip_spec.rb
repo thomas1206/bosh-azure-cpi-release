@@ -13,14 +13,14 @@ describe Bosh::AzureCloud::AzureClient2 do
   }
   let(:subscription_id) { mock_azure_properties['subscription_id'] }
   let(:tenant_id) { mock_azure_properties['tenant_id'] }
-  let(:api_version) { '2015-05-01-preview' }
+  let(:api_version) { AZURE_API_VERSION }
   let(:resource_group) { mock_azure_properties['resource_group_name'] }
 
   let(:token_uri) { "https://login.microsoftonline.com/#{tenant_id}/oauth2/token?api-version=#{api_version}" }
 
   let(:public_ip_name) { "fake-public-ip-name" }
   let(:valid_access_token) { "valid-access-token" }
-  let(:invalid_access_token) { "invalid-access-token" }
+
   let(:expires_on) { (Time.now+1800).to_i.to_s }
 
   describe "#delete_public_ip" do

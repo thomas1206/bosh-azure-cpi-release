@@ -4,15 +4,17 @@ This topic shows you how to permit a service principal (such as an automated pro
 
 A service principal contains the following credentials which will be mentioned in this page. Please store them in a secure location because they are sensitive credentials.
 
-- **TENANT-ID**
-- **CLIENT-ID**
-- **CLIENT-SECRET** 
+- **TENANT_ID**
+- **CLIENT_ID**
+- **CLIENT_SECRET** 
 
 # 1 Prepare Azure CLI
 
 ## 1.1 Install Azure CLI
 
 Install and configure Azure CLI following the documentation [**HERE**](http://azure.microsoft.com/en-us/documentation/articles/xplat-cli/).
+
+The following commands in this topic are based on Azure CLI version `0.9.18`.
 
 >**NOTE:**
   * It is suggested to run Azure CLI using Ubuntu Server 14.04 LTS or Windows 10.
@@ -32,18 +34,36 @@ azure config mode arm
 
 ```
 #Enter your Microsoft account credentials when prompted.
-azure login
+azure login --environment $ENVIRONMENT
 ```
 
 >**NOTE:**
-  * `azure login` requires a work or school account. Never login with your personal account.
-  * If you do not have a work or school account currently, you can easily create a work or school account with the [**guide**](https://azure.microsoft.com/en-us/documentation/articles/xplat-cli-connect/).
+  * `azure login` requires a work or school account. Never login with your personal account. If you do not have a work or school account currently, you can easily create a work or school account with the [**guide**](https://azure.microsoft.com/en-us/documentation/articles/xplat-cli-connect/).
+  * `$ENVIRONMENT` can be `AzureCloud`, `AzureChinaCloud`, `AzureUSGovernment` and so on.
+  * If you fail to login `AzureChinaCloud` with a `CERT_UNTRUSTED` error, please use the latest version of node (4.x) and mostly the issue should be resolved. [azure-xplat-cli/2725](https://github.com/Azure/azure-xplat-cli/issues/2725)
 
 # 2 Create a Service Principal
 
 Azure CPI provisions resources in Azure using the Azure Resource Manager (ARM) APIs. We use a Service Principal account to give Azure CPI the access to proper resources.
 
-## 2.1 Set Default Subscription
+## 2.1 Via Script (RECOMMENDED)
+
+1. Download [bash script](https://raw.githubusercontent.com/cloudfoundry-incubator/bosh-azure-cpi-release/master/docs/get-started/create-service-principal.sh) or [Powershell script](https://raw.githubusercontent.com/cloudfoundry-incubator/bosh-azure-cpi-release/master/docs/get-started/create-service-principal.ps1) according to your command line tool.
+
+2. Run the script to generate your Service Principal.
+
+  Sample output:
+  ```
+  ==============Created Serivce Principal==============
+  SUBSCRIPTION_ID: 12345678-1234-5678-1234-678912345678
+  TENANT_ID:       11111111-1234-5678-1234-678912345678
+  CLIEND_ID:       87654321-1234-5678-1234-678912345678
+  CLIENT_SECRET:   RANDOM-STRING
+  ```
+
+## 2.2 Manually
+
+### 2.2.1 Set Default Subscription
 
 1. Check whether you have multiple subscriptions.
 
@@ -87,9 +107,9 @@ Azure CPI provisions resources in Azure using the Azure Resource Manager (ARM) A
   You can get the following values from the output:
 
   * **SUBSCRIPTION-ID** - the row `id`.
-  * **TENANT-ID**       - the row `tenantId`, please note it down for later use.
+  * **TENANT_ID**       - the row `tenantId`, please note it down for later use.
 
-  >**NOTE:** If your **TENANT-ID** is not defined, one possibility is that you are using a personal account to log in to your Azure subscription. See [1.2 Configure Azure CLI](#configure_azure_cli) on how to fix this.
+  >**NOTE:** If your **TENANT_ID** is not defined, one possibility is that you are using a personal account to log in to your Azure subscription. See [1.2 Configure Azure CLI](#configure_azure_cli) on how to fix this.
 
 2. Ensure your default subscription is set to the one you want to create your service principal.
 
@@ -112,7 +132,7 @@ Azure CPI provisions resources in Azure using the Azure Resource Manager (ARM) A
   info:    account set command OK
   ```
 
-## 2.2 Creating an Azure Active Directory (AAD) application
+### 2.2.2 Creating an Azure Active Directory (AAD) application
 
 Create an AAD application with your information.
 
@@ -121,7 +141,7 @@ azure ad app create --name <name> --password <password> --home-page <home-page> 
 ```
 
 * name: The display name for the application
-* password: The value for the password credential associated with the application that will be valid for one year by default. This is your **CLIENT-SECRET**. Please note it down for later use.
+* password: The value for the password credential associated with the application that will be valid for one year by default. This is your **CLIENT_SECRET**. Please note it down for later use.
 * home-page: The URL to the application homepage. You can use a faked URL here.
 * Identifier-uris: The comma-delimitied URIs that identify the application. You can use a faked URL here.
 
@@ -136,36 +156,27 @@ Sample Output:
 ```
 info:    Executing command ad app create
 + Creating application Service Principal for BOSH
-data:    Application Id:          246e4af7-75b5-494a-89b5-363addb9f0fa
-data:    Application Object Id:   a4f0d442-af80-4d98-9cba-6bf1459ad1ea
-data:    Application Permissions:
-data:                             claimValue:  user_impersonation
-data:                             description:  Allow the application to access Service Principal for BOSH on behalf of the signed-in user.
-data:                             directAccessGrantTypes:
-data:                             displayName:  Access Service Principal for BOSH
-data:                             impersonationAccessGrantTypes:  impersonated=User, impersonator=Application
-data:                             isDisabled:
-data:                             origin:  Application
-data:                             permissionId:  1a1eb6d1-26ca-47de-abdb-365f54560e55
-data:                             resourceScopeType:  Personal
-data:                             userConsentDescription:  Allow the applicationto access Service Principal for BOSH on your behalf.
-data:                             userConsentDisplayName:  Access Service Principal for BOSH
-data:                             lang:
+data:    AppId:                   246e4af7-75b5-494a-89b5-363addb9f0fa
+data:    ObjectId:                208096bb-4899-49e2-83ea-1a270154f427
+data:    DisplayName:             Service Principal for BOSH
+data:    IdentifierUris:          0=http://BOSHAzureCPI
+data:    ReplyUrls:
+data:    AvailableToOtherTenants:  False
 info:    ad app create command OK
 ```
 
-* `Application Id` is your **CLIENT-ID** you need to create the service principal. Please note it down for later use.
+* `AppId` is your **CLIENT_ID** you need to create the service principal. Please note it down for later use.
 
-## 2.3 Create a Service Principal
+### 2.2.3 Create a Service Principal
 
 ```
-azure ad sp create <CLIENT-ID>
+azure ad sp create --applicationId $CLIENT_ID
 ```
 
 Example:
 
 ```
-azure ad sp create 246e4af7-75b5-494a-89b5-363addb9f0fa
+azure ad sp create --applicationId 246e4af7-75b5-494a-89b5-363addb9f0fa
 ```
 
 Sample Output:
@@ -183,20 +194,33 @@ info:    ad sp create command OK
 
 You can get **service-principal-name** from any value of **Service Principal Names** to assign role to your service principal.
 
-## 2.4 Assigning roles to your Service Principal
+### 2.2.4 Assigning roles to your Service Principal
 
-Now you have a service principal account, you need to grant this account access to proper resource use Azure CLI.
+Now you have a service principal account, you need to grant this account access to proper resource use Azure CLI. Please refer to [RBAC: Built-in roles](https://azure.microsoft.com/en-us/documentation/articles/role-based-access-built-in-roles/) to learn Azure Role-Based Access Control.
 
-### 2.4.1 Assigning Roles
+There are two options:
+
+* Please assgin the role `Virtual Machine Contributor` and `Network Contributor`, if the service principal is only for deploying BOSH and Cloud Foundry on Azure.
+* Please assign the role `Contributor` to your service principal if you need to manage other more resources. For example:
+ * Use terraform to bootstrap the environment
+ * Use [Azure Service Broker](https://github.com/Azure/meta-azure-service-broker/blob/master/docs/how-admin-deploy-the-broker.md) to manage Azure services
+
+In this section, `Virtual Machine Contributor` and `Network Contributor` are assigned.
+
+  * `Virtual Machine Contributor` can manage virtual machines but not the virtual network or storage account to which they are connected. However, it can list keys of the storage account.
+  * `Network Contributor` can manage all network resources.
+
 
 ```
-azure role assignment create --spn <service-principal-name> --roleName "Contributor" --subscription <subscription-id>
+azure role assignment create --spn <service-principal-name> --roleName "Virtual Machine Contributor" --subscription <subscription-id>
+azure role assignment create --spn <service-principal-name> --roleName "Network Contributor" --subscription <subscription-id>
 ```
 
 Example:
 
 ```
-azure role assignment create --spn "http://BOSHAzureCPI" --roleName "Contributor" --subscription 87654321-1234-5678-1234-678912345678
+azure role assignment create --spn "http://BOSHAzureCPI" --roleName "Virtual Machine Contributor" --subscription 87654321-1234-5678-1234-678912345678
+azure role assignment create --spn "http://BOSHAzureCPI" --roleName "Network Contributor" --subscription 87654321-1234-5678-1234-678912345678
 ```
 
 You can verify the assignment with the following command:
@@ -208,46 +232,111 @@ azure role assignment list --spn <service-principal-name>
 Sample Output:
 
 ```
-data:    AD Object:
-data:      ID:              7a3029f9-1b74-443e-8987-bed5b6f00009
-data:      Type:            ServicePrincipal
-data:      Display Name:    Service Principal for BOSH
-data:      Principal Name:
-data:    Scope:             /subscriptions/87654321-1234-5678-1234-678912345678
-data:    Role:
-data:      Name:            Contributor
-data:      Permissions:
-data:        Actions:      *
-data:        NotActions:   Microsoft.Authorization/*/Write,Microsoft.Authorization/*/Delete
+info:    Executing command role assignment list
++ Searching for role assignments
+data:    RoleAssignmentId     : /subscriptions/87654321-1234-5678-1234-678912345678/providers/Microsoft.Authorization/roleAssignments/16645a17-3184-47c1-8e00-8eb1d0643d54
+data:    RoleDefinitionName   : Network Contributor
+data:    RoleDefinitionId     : 4d97b98b-1d4f-4787-a291-c67834d212e7
+data:    Scope                : /subscriptions/87654321-1234-5678-1234-678912345678
+data:    Display Name         : CloudFoundry
+data:    SignInName           :
+data:    ObjectId             : 039ccb8a-5b34-4020-bff9-ba38bef98f61
+data:    ObjectType           : ServicePrincipal
+data:
+data:    RoleAssignmentId     : /subscriptions/87654321-1234-5678-1234-678912345678/providers/Microsoft.Authorization/roleAssignments/8af758ad-1377-4aa4-ae12-3c084ab2271f
+data:    RoleDefinitionName   : Virtual Machine Contributor
+data:    RoleDefinitionId     : 9980e02c-c2be-4d73-94e8-173b1dc7cf3c
+data:    Scope                : /subscriptions/87654321-1234-5678-1234-678912345678
+data:    Display Name         : CloudFoundry
+data:    SignInName           :
+data:    ObjectId             : 039ccb8a-5b34-4020-bff9-ba38bef98f61
+data:    ObjectType           : ServicePrincipal
+data:
+info:    role assignment list command OK
+```
+
+By default, the scope of the role is set to the subscription. And it can also be assigned to one specific resource group or multiple resource groups if you want.
+
+```
+azure role assignment create --spn <service-principal-name> --roleName "Virtual Machine Contributor" --resource-group <resource-group-name>
+azure role assignment create --spn <service-principal-name> --roleName "Network Contributor" --resource-group <resource-group-name>
+```
+
+For example:
+
+If you want to assign `Virtual Machine Contributor` role to only one resource group and `Network Contributor` role to two resource groups, you can use the following commands.
+
+```
+azure role assignment create --spn "http://BOSHAzureCPI" --roleName "Virtual Machine Contributor" --resource-group MyFirstRG
+azure role assignment create --spn "http://BOSHAzureCPI" --roleName "Network Contributor" --resource-group MyFirstRG
+azure role assignment create --spn "http://BOSHAzureCPI" --roleName "Network Contributor" --resource-group MySecondRG
+```
+
+The output of listing the roles:
+
+```
+$ azure role assignment list --spn "http://BOSHAzureCPI"
+info:    Executing command role assignment list
++ Searching for role assignments
+data:    RoleAssignmentId     : /subscriptions/87654321-1234-5678-1234-678912345678/resourcegroups/MyFirstRG/providers/Microsoft.Authorization/roleAssignments/62db1b5a-e425-4c5d-8546-9290adb76221
+data:    RoleDefinitionName   : Network Contributor
+data:    RoleDefinitionId     : 4d97b98b-1d4f-4787-a291-c67834d212e7
+data:    Scope                : /subscriptions/87654321-1234-5678-1234-678912345678/resourcegroups/MyFirstRG
+data:    Display Name         : Service Principal for BOSH
+data:    SignInName           :
+data:    ObjectId             : 87654321-1234-5678-1234-123456781234
+data:    ObjectType           : ServicePrincipal
+data:
+data:    RoleAssignmentId     : /subscriptions/87654321-1234-5678-1234-678912345678/resourcegroups/MyFirstRG/providers/Microsoft.Authorization/roleAssignments/ab9d2a39-251c-4d4b-9eb4-70ad2ed0e432
+data:    RoleDefinitionName   : Virtual Machine Contributor
+data:    RoleDefinitionId     : 9980e02c-c2be-4d73-94e8-173b1dc7cf3c
+data:    Scope                : /subscriptions/87654321-1234-5678-1234-678912345678/resourcegroups/MyFirstRG
+data:    Display Name         : Service Principal for BOSH
+data:    SignInName           :
+data:    ObjectId             : 87654321-1234-5678-1234-123456781234
+data:    ObjectType           : ServicePrincipal
+data:
+data:    RoleAssignmentId     : /subscriptions/87654321-1234-5678-1234-678912345678/resourcegroups/MySecondRG/providers/Microsoft.Authorization/roleAssignments/eeafda2b-ae46-478b-9c40-924edb670dd3
+data:    RoleDefinitionName   : Network Contributor
+data:    RoleDefinitionId     : 4d97b98b-1d4f-4787-a291-c67834d212e7
+data:    Scope                : /subscriptions/87654321-1234-5678-1234-678912345678/resourcegroups/MySecondRG
+data:    Display Name         : Service Principal for BOSH
+data:    SignInName           :
+data:    ObjectId             : 87654321-1234-5678-1234-123456781234
+data:    ObjectType           : ServicePrincipal
+data:
+info:    role assignment list command OK
 ```
 
 <a name="verify-your-service-principal"></a>
-## 2.5 Verify Your Service Principal
+## 2.3 Verify Your Service Principal
 
 Your service principal is created as follows:
 
-- **TENANT-ID**
-- **CLIENT-ID**
-- **CLIENT-SECRET** 
+- **TENANT_ID**
+- **CLIENT_ID**
+- **CLIENT_SECRET** 
 
 Please verify it with the following steps:
 
 1. Use Azure CLI to login with your service principal.
 
-  You can find the `TENANT-ID`, `CLIENT-ID`, and `CLIENT-SECRET` properties in the `~/bosh.yml` file. If you cannot login, then the service principal is invalid.
+  You can find the `TENANT_ID`, `CLIENT_ID`, and `CLIENT_SECRET` properties in the `~/bosh.yml` file. If you cannot login, then the service principal is invalid.
 
   ```
-  azure login --username <CLIENT-ID> --password <CLIENT-SECRET> --service-principal --tenant <TENANT-ID>
+  azure login --username $CLIENT_ID --password $CLIENT_SECRET --service-principal --tenant $TENANT_ID --environment $ENVIRONMENT
   ```
 
   Example:
 
   ```
-  azure login --username 246e4af7-75b5-494a-89b5-363addb9f0fa --password "password" --service-principal --tenant 22222222-1234-5678-1234-678912345678
+  azure login --username 246e4af7-75b5-494a-89b5-363addb9f0fa --password "password" --service-principal --tenant 22222222-1234-5678-1234-678912345678 --environment AzureCloud
   ```
 
 2. Verify that the subscription which the service principal belongs to is the same subscription that is used to create your resource group. (This may happen when you have multiple subscriptions.)
 
-3. Recreate a service principal on your tenant if the service principal is invalid.
+3. Verify that your service principal has been assigned the correct roles according to your usage. For example, verify whether you can use the service principal to create the service which you want.
+
+4. Recreate a service principal on your tenant if the service principal is invalid.
 
 > **NOTE:** In some cases, if the service principal is invalid, then the deployment of BOSH will fail. Errors in `~/run.log` will show `get_token - http error` like this [reported issue](https://github.com/cloudfoundry-incubator/bosh-azure-cpi-release/issues/49).

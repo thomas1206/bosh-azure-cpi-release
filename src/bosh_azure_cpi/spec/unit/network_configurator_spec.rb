@@ -2,9 +2,12 @@ require "spec_helper"
 
 describe Bosh::AzureCloud::NetworkConfigurator do
 
+  let(:azure_properties) { mock_azure_properties }
   let(:dynamic) {
     {
       "type" => "dynamic",
+      "default" => ["dns", "gateway"],
+      "dns" => ["8.8.8.8"],
       "cloud_properties" =>
         {
           "subnet_name" => "bar",
@@ -15,8 +18,11 @@ describe Bosh::AzureCloud::NetworkConfigurator do
   let(:manual) {
     {
       "type" => "manual",
+      "dns" => ["9.9.9.9"],
+      "ip"=>"fake-ip",
       "cloud_properties" =>
         {
+          "resource_group_name" => "fake-rg",
           "subnet_name" => "bar",
           "virtual_network_name" => "foo",
           "security_group" => "fake-nsg"
@@ -29,216 +35,141 @@ describe Bosh::AzureCloud::NetworkConfigurator do
     }
   }
 
-  it "should raise an error if the spec isn't a hash" do
-    expect {
-      Bosh::AzureCloud::NetworkConfigurator.new("foo")
-    }.to raise_error ArgumentError
+  context "when spec isn't a hash" do
+    it "should raise an error" do
+      expect {
+        Bosh::AzureCloud::NetworkConfigurator.new("foo")
+      }.to raise_error ArgumentError
+    end
   end
 
-  describe "#public_ip" do
-    it "should extract public ip address from vip network when there's also manual network" do
-      spec = {}
-      spec["network_a"] = vip
-      spec["network_a"]["ip"] = "10.0.0.1"
-      spec["network_b"] = manual
-      spec["network_b"]["ip"] = "10.0.0.2"      
+  context "when network type is manual" do
+    let(:network_spec) {
+      {
+        "network1" => manual
+      }
+    }
 
-      nc = Bosh::AzureCloud::NetworkConfigurator.new(spec)
-      expect(nc.public_ip).to eq("10.0.0.1")
-    end     
-    
-    it "should extract public ip address from vip network when there's also dynamic network" do
-      spec = {}
-      spec["network_a"] = vip
-      spec["network_a"]["ip"] = "10.0.0.1"
-      spec["network_b"] = dynamic
-      spec["network_b"]["ip"] = "10.0.0.2"      
-
-      nc = Bosh::AzureCloud::NetworkConfigurator.new(spec)
-      expect(nc.public_ip).to eq("10.0.0.1")
-    end     
+    it "should create a ManualNetwork instance" do
+      nc = Bosh::AzureCloud::NetworkConfigurator.new(azure_properties, network_spec)
+      expect(nc.networks.length).to eq(1)
+      expect(nc.networks[0]).to be_a Bosh::AzureCloud::ManualNetwork
+    end
   end
 
-  describe "#private_ip" do
-    it "should extract private ip address for manual network" do
-      spec = {}
-      spec["network_a"] = manual
-      spec["network_a"]["ip"] = "10.0.0.1"
+  context "when network type is dynamic" do
+    let(:network_spec) {
+      {
+        "network1" => dynamic
+      }
+    }
 
-      nc = Bosh::AzureCloud::NetworkConfigurator.new(spec)
-      expect(nc.private_ip).to eq("10.0.0.1")
+    it "should create a DynamicNetwork instance" do
+      nc = Bosh::AzureCloud::NetworkConfigurator.new(azure_properties, network_spec)
+      expect(nc.networks.length).to eq(1)
+      expect(nc.networks[0]).to be_a Bosh::AzureCloud::DynamicNetwork
     end
-
-    it "should extract private ip address from manual network when there's also vip network" do
-      spec = {}
-      spec["network_a"] = vip
-      spec["network_a"]["ip"] = "10.0.0.1"
-      spec["network_b"] = manual
-      spec["network_b"]["ip"] = "10.0.0.2"      
-
-      nc = Bosh::AzureCloud::NetworkConfigurator.new(spec)
-      expect(nc.private_ip).to eq("10.0.0.2")
-    end     
-    
-    it "should not extract private ip address for dynamic network" do
-      spec = {}
-      spec["network_a"] = dynamic
-      spec["network_a"]["ip"] = "10.0.0.1"
-
-      nc = Bosh::AzureCloud::NetworkConfigurator.new(spec)
-      expect(nc.private_ip).to be_nil
-    end     
-
-    it "should not extract private ip address from dynamic network when there's also vip network" do
-      spec = {}
-      spec["network_a"] = vip
-      spec["network_a"]["ip"] = "10.0.0.1"
-      spec["network_b"] = dynamic
-      spec["network_b"]["ip"] = "10.0.0.2"      
-
-      nc = Bosh::AzureCloud::NetworkConfigurator.new(spec)
-      expect(nc.private_ip).to be_nil
-    end     
   end
-  
-  describe "network types" do
-    it "should not raise an error if one dynamic network are defined" do
-      network_spec = {
-          "network1" => dynamic
+
+  context "when network has vip configured" do
+    let(:network_spec) {
+      {
+        "network1" => manual,
+        "network2" => vip
       }
-      expect {
-        Bosh::AzureCloud::NetworkConfigurator.new(network_spec)
-      }.not_to raise_error
-    end
+    }
 
-    it "should not raise an error if one manual networks are defined" do
-      network_spec = {
-          "network1" => manual
+    it "should create a VipNetwork instance" do
+      nc = Bosh::AzureCloud::NetworkConfigurator.new(azure_properties, network_spec)
+      expect(nc.vip_network).to be_a Bosh::AzureCloud::VipNetwork
+      expect(nc.networks.length).to eq(1)
+    end
+  end
+
+  context "when network spec has 2 networks (dynamic and manual) defined" do
+    let(:network_spec) {
+      {
+        "network1" => dynamic,
+        "network2" => manual
       }
-      expect {
-        Bosh::AzureCloud::NetworkConfigurator.new(network_spec)
-      }.not_to raise_error
-    end
+    }
 
-    it "should raise an error if both dynamic and manual networks are defined" do
-      network_spec = {
-          "network1" => dynamic,
-          "network2" => manual
+    it "should return 2 for length of @networks" do
+      nc = Bosh::AzureCloud::NetworkConfigurator.new(azure_properties, network_spec)
+      expect(nc.networks.length).to eq(2)
+    end
+  end
+
+  context "when neither dynamic nor manual network is defined" do
+    let(:network_spec) {
+      {
+        "network1" => vip,
       }
-      expect {
-        Bosh::AzureCloud::NetworkConfigurator.new(network_spec)
-      }.to raise_error Bosh::Clouds::CloudError, "Must have exactly one dynamic or manual network per instance"
-    end
+    }
 
-    it "should raise an error if neither dynamic nor manual networks are defined" do
+    it "should raise an error" do
       expect {
-        Bosh::AzureCloud::NetworkConfigurator.new("network1" => vip)
-      }.to raise_error Bosh::Clouds::CloudError, "Exactly one dynamic or manual network must be defined"
+        Bosh::AzureCloud::NetworkConfigurator.new(azure_properties, network_spec)
+      }.to raise_error Bosh::Clouds::CloudError, "At least one dynamic or manual network must be defined"
     end
+  end
 
-    it "should raise an error if multiple vip networks are defined" do
-      network_spec = {
-          "network1" => vip,
-          "network2" => vip
+  context "when multiple vip networks are defined" do
+    let(:network_spec) {
+      {
+        "network1" => vip,
+        "network2" => vip
       }
-      expect {
-        Bosh::AzureCloud::NetworkConfigurator.new(network_spec)
-      }.to raise_error Bosh::Clouds::CloudError, "More than one vip network for 'network2'"
-    end
+    }
 
-    it "should raise an error if multiple dynamic networks are defined" do
-      network_spec = {
-          "network1" => dynamic,
-          "network2" => dynamic
+    it "should raise an error" do
+      expect {
+        Bosh::AzureCloud::NetworkConfigurator.new(azure_properties, network_spec)
+      }.to raise_error Bosh::Clouds::CloudError, "More than one vip network for `network2'"
+    end
+  end
+
+  context "when an illegal network type is used" do
+    let(:network_spec) {
+      {
+        "network1" => {"type" => "foo"}
       }
-      expect {
-        Bosh::AzureCloud::NetworkConfigurator.new(network_spec)
-      }.to raise_error Bosh::Clouds::CloudError, "Must have exactly one dynamic or manual network per instance"
-    end
+    }
 
-    it "should raise an error if multiple manual networks are defined" do
-      network_spec = {
+    it "should raise an error" do
+      expect {
+        Bosh::AzureCloud::NetworkConfigurator.new(azure_properties, network_spec)
+      }.to raise_error Bosh::Clouds::CloudError, "Invalid network type `foo' for Azure, " \
+                        "can only handle `dynamic', `vip', or `manual' network types"
+    end
+  end
+
+  describe "#default_dns" do
+    context "when there are multiple networks" do
+      let(:network_spec) {
+        {
           "network1" => manual,
-          "network2" => manual
-      }
-      expect {
-        Bosh::AzureCloud::NetworkConfigurator.new(network_spec)
-      }.to raise_error Bosh::Clouds::CloudError, "Must have exactly one dynamic or manual network per instance"
-    end
-
-    it "should raise an error if an illegal network type is used" do
-      expect {
-        Bosh::AzureCloud::NetworkConfigurator.new("network1" => {"type" => "foo"})
-      }.to raise_error Bosh::Clouds::CloudError, "Invalid network type 'foo' for Azure, " \
-                        "can only handle 'dynamic', 'vip', or 'manual' network types"
-    end
-  end
-
-  describe  "uncomplete network spec" do
-    it "should raise an error if subnet_name is missed in one dynamic network" do
-      dynamic["cloud_properties"].delete("subnet_name")
-      network_spec = {
-          "network1" => dynamic
-      }
-      expect {
-        Bosh::AzureCloud::NetworkConfigurator.new(network_spec)
-      }.to raise_error Bosh::Clouds::CloudError, "subnet_name required for dynamic network"
-    end
-
-    it "should raise an error if virtual_network_name is missed in one dynamic network" do
-      dynamic["cloud_properties"].delete("virtual_network_name")
-      network_spec = {
-          "network1" => dynamic
-      }
-      expect {
-        Bosh::AzureCloud::NetworkConfigurator.new(network_spec)
-      }.to raise_error Bosh::Clouds::CloudError, "virtual_network_name required for dynamic network"
-    end
-
-    it "should raise an error if subnet_name is missed in one manual network" do
-      manual["cloud_properties"].delete("subnet_name")
-      network_spec = {
-          "network1" => manual
-      }
-      expect {
-        Bosh::AzureCloud::NetworkConfigurator.new(network_spec)
-      }.to raise_error Bosh::Clouds::CloudError, "subnet_name required for manual network"
-    end
-
-    it "should raise an error if virtual_network_name is missed in one manual network" do
-      manual["cloud_properties"].delete("virtual_network_name")
-      network_spec = {
-          "network1" => manual
-      }
-      expect {
-        Bosh::AzureCloud::NetworkConfigurator.new(network_spec)
-      }.to raise_error Bosh::Clouds::CloudError, "virtual_network_name required for manual network"
-    end
-  end
-
-  describe "#security_group" do
-    it "should return network security group when spec contains security_group" do
-      spec = {}
-      spec["network_a"] = manual
-      spec["network_b"] = vip
-
-      nc = Bosh::AzureCloud::NetworkConfigurator.new(spec)
-      expect(nc.security_group).to eq("fake-nsg")
-    end
-
-    it "should return nil when spec does not contain security_group" do
-      spec = {}
-      spec["network_a"] = {
-        "type" => "manual",
-        "cloud_properties" => {
-            "subnet_name" => "bar",
-            "virtual_network_name" => "foo"
+          "network2" => dynamic
         }
       }
-      spec["network_b"] = vip
 
-      nc = Bosh::AzureCloud::NetworkConfigurator.new(spec)
-      expect(nc.security_group).to be_nil
+      it "should return dns from the network which has default dns defined" do
+        nc = Bosh::AzureCloud::NetworkConfigurator.new(azure_properties, network_spec)
+        expect(nc.default_dns).to eq(['8.8.8.8'])
+      end
+    end
+
+    context "when there is only 1 network" do
+      let(:network_spec) {
+        {
+          "network1" => manual
+        }
+      }
+
+      it "should return dns from the network anyway" do
+        nc = Bosh::AzureCloud::NetworkConfigurator.new(azure_properties, network_spec)
+        expect(nc.default_dns).to eq(['9.9.9.9'])
+      end
     end
   end
 end

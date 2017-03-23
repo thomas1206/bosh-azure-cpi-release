@@ -1,9 +1,5 @@
 module Bosh::AzureCloud
   class StemcellManager
-    STEMCELL_CONTAINER = 'stemcell'
-    STEMCELL_PREFIX    = 'bosh-stemcell'
-    STEMCELL_TABLE     = 'stemcells'
-
     STEMCELL_STATUS_PENDING       = 'pending'
     STEMCELL_STATUS_SUCCESS       = 'success'
     DEFAULT_COPY_STEMCELL_TIMEOUT = 20 * 60 #seconds
@@ -11,19 +7,13 @@ module Bosh::AzureCloud
     include Bosh::Exec
     include Helpers
 
-    def initialize(azure_properties, blob_manager, table_manager)
+    def initialize(blob_manager, table_manager, storage_account_manager)
       @blob_manager  = blob_manager
       @table_manager = table_manager
+      @storage_account_manager = storage_account_manager
       @logger = Bosh::Clouds::Config.logger
-      @default_storage_account_name = azure_properties['storage_account_name']
-    end
 
-    def prepare(storage_account_name)
-      @logger.info("prepare(#{storage_account_name})")
-      unless @blob_manager.has_container?(storage_account_name, STEMCELL_CONTAINER)
-        @logger.debug("Prepare to create container #{STEMCELL_CONTAINER} in #{storage_account_name}")
-        @blob_manager.create_container(storage_account_name, STEMCELL_CONTAINER, {})
-      end
+      @default_storage_account_name = @storage_account_manager.default_storage_account_name
     end
 
     def delete_stemcell(name)
@@ -42,12 +32,11 @@ module Bosh::AzureCloud
         end
       end
 
-      storage_account_name = @default_storage_account_name
-      @blob_manager.delete_blob(storage_account_name, STEMCELL_CONTAINER, "#{name}.vhd") if has_stemcell?(storage_account_name, name)
+      @blob_manager.delete_blob(@default_storage_account_name, STEMCELL_CONTAINER, "#{name}.vhd") if has_stemcell?(@default_storage_account_name, name)
     end
 
-    def create_stemcell(image_path, cloud_properties)
-      @logger.info("create_stemcell(#{image_path}, #{cloud_properties})")
+    def create_stemcell(image_path, stemcell_properties)
+      @logger.info("create_stemcell(#{image_path}, #{stemcell_properties})")
 
       stemcell_name = nil
       Dir.mktmpdir('sc-') do |tmp_dir|
@@ -55,7 +44,8 @@ module Bosh::AzureCloud
         run_command("tar -zxf #{image_path} -C #{tmp_dir}")
         @logger.info("Start to upload VHD")
         stemcell_name = "#{STEMCELL_PREFIX}-#{SecureRandom.uuid}"
-        @blob_manager.create_page_blob(@default_storage_account_name, STEMCELL_CONTAINER, "#{tmp_dir}/root.vhd", "#{stemcell_name}.vhd")
+        @logger.info("Upload the stemcell #{stemcell_name} to the storage account #{@default_storage_account_name}")
+        @blob_manager.create_page_blob(@default_storage_account_name, STEMCELL_CONTAINER, "#{tmp_dir}/root.vhd", "#{stemcell_name}.vhd", stemcell_properties)
       end
       stemcell_name
     end
@@ -75,6 +65,14 @@ module Bosh::AzureCloud
       @blob_manager.get_blob_uri(storage_account_name, STEMCELL_CONTAINER, "#{name}.vhd")
     end
 
+    def get_stemcell_info(storage_account_name, name)
+      @logger.info("get_stemcell_info(#{storage_account_name}, #{name})")
+      uri = @blob_manager.get_blob_uri(storage_account_name, STEMCELL_CONTAINER, "#{name}.vhd")
+      metadata = @blob_manager.get_blob_metadata(storage_account_name, STEMCELL_CONTAINER, "#{name}.vhd")
+      cloud_error("The stemcell `#{name}' does not exist in the storage account `#{storage_account_name}'") if metadata.nil?
+      StemcellInfo.new(uri, metadata)
+    end
+
     private
 
     def run_command(command)
@@ -88,9 +86,6 @@ module Bosh::AzureCloud
       options = {
         :filter => "PartitionKey eq '#{name}' and RowKey eq '#{storage_account_name}'"
       }
-
-      # Workaround because of the issue https://github.com/Azure/azure-sdk-for-ruby/issues/281
-      @table_manager.has_table?(STEMCELL_TABLE)
 
       entities = @table_manager.query_entities(STEMCELL_TABLE, options)
       if entities.size > 0
@@ -115,6 +110,11 @@ module Bosh::AzureCloud
             # Another process is copying the same stemcell
             return wait_stemcell_copy(storage_account_name, name, timeout = DEFAULT_COPY_STEMCELL_TIMEOUT)
           end
+
+          # Create containers if they are missing.
+          # Background: When users create a storage account without containers in it, and use that storage account for a resource pool,
+          #             CPI will try to create related containers when copying stemcell to that storage account.
+          @blob_manager.prepare(storage_account_name)
 
           @logger.info("Copy stemcell #{name} to #{storage_account_name}")
           source_blob_uri = get_stemcell_uri(@default_storage_account_name, name)

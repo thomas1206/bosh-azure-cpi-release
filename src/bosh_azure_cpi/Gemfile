@@ -1,13 +1,14 @@
 source 'https://rubygems.org'
 
-gem 'bosh_common', '1.3215.3.0'
-gem 'bosh_cpi',    '1.3215.3.1'
-gem 'azure',       '~>0.7.4'
-gem 'vhd',         '~>0.0.4'
-gem 'httpclient',  '=2.4.0'
+gem 'bosh_common'
+gem 'bosh_cpi'
+gem 'azure-storage', '0.11.5.preview'
+gem 'vhd',           '0.0.4'
+gem 'httpclient',    '2.4.0'
 
 group :development, :test do
   gem 'rspec', '~>3.0.0'
   gem 'rake', '~>10.3.2'
   gem 'webmock'
+  gem 'simplecov'
 end

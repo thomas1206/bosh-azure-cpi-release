@@ -1,11 +1,72 @@
 require "spec_helper"
 
 describe Bosh::AzureCloud::Helpers do
+  let(:api_version) { AZURE_API_VERSION }
+  let(:azure_stack_api_version) { AZURE_STACK_API_VERSION }
+  let(:azure_china_api_version) { AZURE_CHINA_API_VERSION }
+  let(:azure_usgov_api_version) { AZURE_USGOV_API_VERSION }
+  let(:azure_german_api_version) { AZURE_GERMAN_API_VERSION }
+
   class HelpersTester
     include Bosh::AzureCloud::Helpers
+
+    def initialize
+      @logger = Logger.new('/dev/null')
+    end
+
+    def set_logger(logger)
+      @logger = logger
+    end
   end
 
   helpers_tester = HelpersTester.new
+
+  describe "#cloud_error" do
+    let(:message) { "fake-error-message" }
+
+    after do
+      helpers_tester.set_logger(Logger.new('/dev/null'))
+    end
+
+    context "when logger is not nil" do
+      let(:logger_strio) { StringIO.new }
+      before do
+        helpers_tester.set_logger(Logger.new(logger_strio))
+      end
+
+      context "when exception is nil" do
+        it "should raise CloudError and log the message" do
+          expect {
+            helpers_tester.cloud_error(message)
+          }.to raise_error(Bosh::Clouds::CloudError, message)
+          expect(logger_strio.string).to include(message)
+        end
+      end
+
+      context "when exception is not nil" do
+        let(:fake_exception) { StandardError.new('fake-exception') }
+        it "should raise CloudError, log the message and the exception" do
+          expect {
+            helpers_tester.cloud_error(message, fake_exception)
+          }.to raise_error(Bosh::Clouds::CloudError, message)
+          expect(logger_strio.string).to include(message)
+          expect(logger_strio.string).to include("fake-exception")
+        end
+      end
+    end
+
+    context "when logger is nil" do
+      before do
+        helpers_tester.set_logger(nil)
+      end
+
+      it "should raise CloudError" do
+        expect {
+          helpers_tester.cloud_error(message)
+        }.to raise_error(Bosh::Clouds::CloudError, message)
+      end
+    end
+  end
 
   describe "#encode_metadata" do
     let(:metadata) do
@@ -82,51 +143,42 @@ describe Bosh::AzureCloud::Helpers do
       end
     end
 
+    context "when environment is AzureUSGovernment" do
+      let(:azure_properties) { {'environment' => 'AzureUSGovernment'} }
+
+      it "should return AzureUSGovernment ARM endpoint" do
+        expect(
+          helpers_tester.get_arm_endpoint(azure_properties)
+        ).to eq("https://management.usgovcloudapi.net/")
+      end
+    end
+
     context "when environment is AzureStack" do
-      context "when azure_stack_domain is not provided" do
-        let(:azure_properties) {
-          {
-            'environment'                => 'AzureStack',
-            'azure_stack_authentication' => 'fake-authentication'
+      let(:azure_properties) {
+        {
+          'environment' => 'AzureStack',
+          'azure_stack' => {
+            'domain'          => 'fake-domain',
+            'authentication'  => 'fake-authentication',
+            'endpoint_prefix' => 'api'
           }
         }
+      }
 
-        it "should return an error" do
-          expect {
-            helpers_tester.get_arm_endpoint(azure_properties)
-          }.to raise_error /missing configuration parameters for AzureStack/
-        end
+      it "should return AzureStack ARM endpoint" do
+        expect(
+          helpers_tester.get_arm_endpoint(azure_properties)
+        ).to eq("https://api.fake-domain")
       end
+    end
 
-      context "when azure_stack_authentication is not provided" do
-        let(:azure_properties) {
-          {
-            'environment'                => 'AzureStack',
-            'azure_stack_domain'         => 'fake-domain'
-          }
-        }
+    context "when environment is AzureGermanCloud" do
+      let(:azure_properties) { {'environment' => 'AzureGermanCloud'} }
 
-        it "should return an error" do
-          expect {
-            helpers_tester.get_arm_endpoint(azure_properties)
-          }.to raise_error /missing configuration parameters for AzureStack/
-        end
-      end
-
-      context "when all required parameters are provided" do
-        let(:azure_properties) {
-          {
-            'environment'                => 'AzureStack',
-            'azure_stack_domain'         => 'fake-domain',
-            'azure_stack_authentication' => 'fake-authentication'
-          }
-        }
-
-        it "should return AzureStack ARM endpoint" do
-          expect(
-            helpers_tester.get_arm_endpoint(azure_properties)
-          ).to eq("https://api.fake-domain")
-        end
+      it "should return AzureGermanCloud ARM endpoint" do
+        expect(
+          helpers_tester.get_arm_endpoint(azure_properties)
+        ).to eq("https://management.microsoftazure.de/")
       end
     end
   end
@@ -152,12 +204,23 @@ describe Bosh::AzureCloud::Helpers do
       end
     end
 
+    context "when environment is AzureUSGovernment" do
+      let(:azure_properties) { {'environment' => 'AzureUSGovernment'} }
+
+      it "should return AzureUSGovernment resource" do
+        expect(
+          helpers_tester.get_token_resource(azure_properties)
+        ).to eq("https://management.usgovcloudapi.net/")
+      end
+    end
+
     context "when environment is AzureStack" do
       let(:azure_properties) {
         {
-          'environment'                => 'AzureStack',
-          'azure_stack_domain'         => 'fake-domain',
-          'azure_stack_authentication' => 'fake-authentication'
+          'environment' => 'AzureStack',
+          'azure_stack' => {
+             'resource' => 'https://azurestack.local-api/'
+          }
         }
       }
 
@@ -165,6 +228,16 @@ describe Bosh::AzureCloud::Helpers do
         expect(
           helpers_tester.get_token_resource(azure_properties)
         ).to eq("https://azurestack.local-api/")
+      end
+    end
+
+    context "when environment is AzureGermanCloud" do
+      let(:azure_properties) { {'environment' => 'AzureGermanCloud'} }
+
+      it "should return AzureGermanCloud resource" do
+        expect(
+          helpers_tester.get_token_resource(azure_properties)
+        ).to eq("https://management.microsoftazure.de/")
       end
     end
   end
@@ -181,7 +254,7 @@ describe Bosh::AzureCloud::Helpers do
       it "should return Azure authentication endpoint and api version" do
         expect(
           helpers_tester.get_azure_authentication_endpoint_and_api_version(azure_properties)
-        ).to eq(["https://login.microsoftonline.com/fake-tenant-id/oauth2/token", "2015-05-01-preview"])
+        ).to eq(["https://login.microsoftonline.com/fake-tenant-id/oauth2/token", api_version])
       end
     end
 
@@ -196,161 +269,182 @@ describe Bosh::AzureCloud::Helpers do
       it "should return AzureChinaCloud authentication endpoint and api version" do
         expect(
           helpers_tester.get_azure_authentication_endpoint_and_api_version(azure_properties)
-        ).to eq(["https://login.chinacloudapi.cn/fake-tenant-id/oauth2/token", "2015-06-15"])
+        ).to eq(["https://login.chinacloudapi.cn/fake-tenant-id/oauth2/token", azure_china_api_version])
+      end
+    end
+
+    context "when environment is AzureUSGovernment" do
+      let(:azure_properties) {
+        {
+          'environment' => 'AzureUSGovernment',
+          'tenant_id'   => 'fake-tenant-id'
+        }
+      }
+
+      it "should return AzureUSGovernment authentication endpoint and api version" do
+        expect(
+          helpers_tester.get_azure_authentication_endpoint_and_api_version(azure_properties)
+        ).to eq(["https://login.microsoftonline.com/fake-tenant-id/oauth2/token", azure_usgov_api_version])
       end
     end
 
     context "when environment is AzureStack" do
-      context "when azure_stack_domain is not provided" do
-        let(:azure_properties) {
-          {
-            'environment'                => 'AzureStack',
-            'azure_stack_authentication' => 'fake-authentication'
-          }
+      let(:azure_properties) {
+        {
+          'environment' => 'AzureStack',
+          'azure_stack' => {
+            'domain'          => 'fake-domain',
+            'endpoint_prefix' => 'api',
+          },
+          'tenant_id'   => 'fake-tenant-id'
         }
+      }
 
-        it "should return an error" do
-          expect {
+      context "when azure_stack.authentication is AzureStack" do
+        before do
+          azure_properties['azure_stack']['authentication'] = 'AzureStack'
+        end
+
+        it "should return AzureStack authentication endpoint and api version" do
+          expect(
             helpers_tester.get_azure_authentication_endpoint_and_api_version(azure_properties)
-          }.to raise_error /missing configuration parameters for AzureStack/
+          ).to eq(["https://fake-domain/oauth2/token", azure_stack_api_version])
         end
       end
 
-      context "when azure_stack_authentication is not provided" do
-        let(:azure_properties) {
-          {
-            'environment'                => 'AzureStack',
-            'azure_stack_domain'         => 'fake-domain'
-          }
-        }
+      context "when azure_stack.authentication is AzureStackAD" do
+        before do
+          azure_properties['azure_stack']['authentication'] = 'AzureStackAD'
+        end
 
-        it "should return an error" do
-          expect {
+        it "should return AzureStack authentication endpoint and api version" do
+          expect(
             helpers_tester.get_azure_authentication_endpoint_and_api_version(azure_properties)
-          }.to raise_error /missing configuration parameters for AzureStack/
+          ).to eq(["https://fake-domain/fake-tenant-id/oauth2/token", azure_stack_api_version])
         end
       end
 
-      context "when all required parameters are provided" do
-        context "when azure_stack_authentication is AzureStack" do
-          let(:azure_properties) {
-            {
-              'environment'                => 'AzureStack',
-              'azure_stack_domain'         => 'fake-domain',
-              'azure_stack_authentication' => 'AzureStack',
-              'tenant_id'                  => 'fake-tenant-id'
-            }
-          }
-
-          it "should return AzureStack authentication endpoint and api version" do
-            expect(
-              helpers_tester.get_azure_authentication_endpoint_and_api_version(azure_properties)
-            ).to eq(["https://fake-domain/oauth2/token", "2015-05-01-preview"])
-          end
+      context "when azure_stack.authentication is AzureAD" do
+        before do
+          azure_properties['azure_stack']['authentication'] = 'AzureAD'
         end
 
-        context "when azure_stack_authentication is AzureStackAD" do
-          let(:azure_properties) {
-            {
-              'environment'                => 'AzureStack',
-              'azure_stack_domain'         => 'fake-domain',
-              'azure_stack_authentication' => 'AzureStackAD',
-              'tenant_id'                  => 'fake-tenant-id'
-            }
-          }
+        it "should return Azure authentication endpoint and api version" do
+          expect(
+            helpers_tester.get_azure_authentication_endpoint_and_api_version(azure_properties)
+          ).to eq(["https://login.microsoftonline.com/fake-tenant-id/oauth2/token", api_version])
+        end
+      end
 
-          it "should return AzureStack authentication endpoint and api version" do
-            expect(
-              helpers_tester.get_azure_authentication_endpoint_and_api_version(azure_properties)
-            ).to eq(["https://fake-domain/fake-tenant-id/oauth2/token", "2015-05-01-preview"])
-          end
+      context "when the value of azure_stack.authentication is not supported" do
+        before do
+          azure_properties['azure_stack']['authentication'] = 'NotSupportedValue'
         end
 
-        context "when azure_stack_authentication is AzureAD" do
-          let(:azure_properties) {
-            {
-              'environment'                => 'AzureStack',
-              'azure_stack_domain'         => 'fake-domain',
-              'azure_stack_authentication' => 'AzureAD',
-              'tenant_id'                  => 'fake-tenant-id'
-            }
-          }
-
-          it "should return Azure authentication endpoint and api version" do
-            expect(
-              helpers_tester.get_azure_authentication_endpoint_and_api_version(azure_properties)
-            ).to eq(["https://login.microsoftonline.com/fake-tenant-id/oauth2/token", "2015-05-01-preview"])
-          end
+        it "should raise an error" do
+          expect {
+            helpers_tester.get_azure_authentication_endpoint_and_api_version(azure_properties)
+          }.to raise_error(/No support for the AzureStack authentication: `NotSupportedValue'/)
         end
+      end
+    end
+
+    context "when environment is AzureGermanCloud" do
+      let(:azure_properties) {
+        {
+          'environment' => 'AzureGermanCloud',
+          'tenant_id'   => 'fake-tenant-id'
+        }
+      }
+
+      it "should return AzureGermanCloud authentication endpoint and api version" do
+        expect(
+          helpers_tester.get_azure_authentication_endpoint_and_api_version(azure_properties)
+        ).to eq(["https://login.microsoftonline.de/fake-tenant-id/oauth2/token", azure_german_api_version])
       end
     end
   end
 
   describe "#initialize_azure_storage_client" do
     let(:azure_client2) { instance_double('Bosh::AzureCloud::AzureClient2') }
-    let(:azure_client) { instance_double(Azure::Client) }
+    let(:azure_client) { instance_double(Azure::Storage::Client) }
     let(:storage_account_name) { "fake-storage-account-name" }
     let(:storage_access_key) { "fake-storage-access-key" }
     let(:storage_account) {
       {
-        :storage_blob_host => 'fake-blob-host/',
-        :storage_table_host => 'fake-table-host/',
+        :name => storage_account_name,
+        :key => storage_access_key,
+        :storage_blob_host => 'https://fake-blob-host:443/',
+        :storage_table_host => 'https://fake-table-host:443/',
       }
     }
-    let(:blob_host) { "fake-blob-host" }
-    let(:table_host) { "fake-table-host" }
+    let(:blob_host_https) { "https://fake-blob-host:443" }
+    let(:table_host_https) { "https://fake-table-host:443" }
+    let(:blob_host_http) { "http://fake-blob-host" }
+    let(:table_host_http) { "http://fake-table-host" }
 
     before do
-      allow(azure_client2).to receive(:get_storage_account_by_name).
-        with(storage_account_name).
-        and_return(storage_account)
-      allow(Azure).to receive(:new).
-        with(storage_account_name, storage_access_key).
+      allow(Azure::Storage::Client).to receive(:create).
         and_return(azure_client)
       allow(azure_client).to receive(:storage_blob_host=)
-      allow(azure_client).to receive(:storage_blob_host).and_return(blob_host)
+      allow(azure_client).to receive(:storage_blob_host).and_return(blob_host_https)
       allow(azure_client).to receive(:storage_table_host=)
-      allow(azure_client).to receive(:storage_table_host).and_return(table_host)
+      allow(azure_client).to receive(:storage_table_host).and_return(table_host_https)
     end
 
     context "for blob" do
-      it "should return an azure storage client with setting storage blob host" do
-        client = helpers_tester.initialize_azure_storage_client(azure_client2,
-          storage_account_name,
-          storage_access_key,
-          'blob')
-        expect(
-          client.storage_blob_host
-        ).to eq(blob_host)
+      context "use https" do
+        it "should return an azure storage client with setting storage blob host (https)" do
+          client = helpers_tester.initialize_azure_storage_client(storage_account, 'blob')
+          expect(
+            client.storage_blob_host
+          ).to eq(blob_host_https)
+        end
+      end
+
+      context "use http" do
+        it "should return an azure storage client with setting storage blob host (http)" do
+          client = helpers_tester.initialize_azure_storage_client(storage_account, 'blob', true)
+          expect(
+            client.storage_blob_host
+          ).to eq(blob_host_http)
+        end
       end
     end
 
     context "for table" do
       context "when the storage account is standard" do
-        it "should return an azure storage client with setting table blob host" do
-          client = helpers_tester.initialize_azure_storage_client(azure_client2,
-            storage_account_name,
-            storage_access_key,
-            'table')
-          expect(
-            client.storage_table_host
-          ).to eq(table_host)
+        context "use https" do
+          it "should return an azure storage client with setting table blob host (https)" do
+            client = helpers_tester.initialize_azure_storage_client(storage_account, 'table')
+            expect(
+              client.storage_table_host
+            ).to eq(table_host_https)
+          end
+        end
+
+        context "use http" do
+          it "should return an azure storage client with setting table blob host (http)" do
+            client = helpers_tester.initialize_azure_storage_client(storage_account, 'table', true)
+            expect(
+              client.storage_table_host
+            ).to eq(table_host_http)
+          end
         end
       end
 
       context "when the storage account is premium" do
         let(:storage_account) {
           {
-            :storage_blob_host => 'fake-blob-host/'
+            :name => storage_account_name,
+            :key => storage_access_key,
+            :storage_blob_host => 'https://fake-blob-host:443/',
           }
         }
 
         it "should raise an error" do
           expect {
-            helpers_tester.initialize_azure_storage_client(azure_client2,
-              storage_account_name,
-              storage_access_key,
-              'table')
+            helpers_tester.initialize_azure_storage_client(storage_account, 'table')
           }.to raise_error "The storage account `#{storage_account_name}' does not support table"
         end
       end
@@ -359,10 +453,7 @@ describe Bosh::AzureCloud::Helpers do
     context "for others" do
       it "should raise an error" do
         expect {
-          helpers_tester.initialize_azure_storage_client(azure_client2,
-            storage_account_name,
-            storage_access_key,
-            'others')
+          helpers_tester.initialize_azure_storage_client(storage_account, 'others')
         }.to raise_error "No support for the storage service: `others'"
       end
     end
@@ -389,13 +480,352 @@ describe Bosh::AzureCloud::Helpers do
       end
     end
 
-    context "disk size is larger than 1s TiB" do
-      let(:disk_size) { 6666 * 1024 }
+    context "disk size is larger than 1023 GiB" do
+      let(:disk_size) { 1024 * 1024 }
 
       it "should raise an error" do
         expect {
           helpers_tester.validate_disk_size(disk_size)
-        }.to raise_error "Azure CPI maximum disk size is 1 TiB"
+        }.to raise_error "Azure CPI maximum disk size is 1023 GiB"
+      end
+    end
+  end
+
+  describe "#is_debug_mode" do
+    context "debug_mode is not set" do
+      let(:azure_properties) { {} }
+
+      it "should return false" do
+        expect(
+          helpers_tester.is_debug_mode(azure_properties)
+        ).to be false
+      end
+    end
+
+    context "debug_mode is set to false" do
+      let(:azure_properties) { { 'debug_mode' => false } }
+
+      it "should return false" do
+        expect(
+          helpers_tester.is_debug_mode(azure_properties)
+        ).to be false
+      end
+    end
+
+    context "debug_mode is set to true" do
+      let(:azure_properties) { { 'debug_mode' => true } }
+
+      it "should return true" do
+        expect(
+          helpers_tester.is_debug_mode(azure_properties)
+        ).to be true
+      end
+    end
+  end
+
+  describe "#merge_storage_common_options" do
+    context "request_id is not set" do
+      let(:options) { {} }
+
+      it "should contain request_id" do
+        expect(
+          helpers_tester.merge_storage_common_options(options)[:request_id]
+        ).not_to be_nil
+      end
+    end
+
+    context "request_id is set" do
+      let(:options) { { :request_id => 'fake-request-id' } }
+
+      it "should contain a new request_id" do
+        expect(
+          helpers_tester.merge_storage_common_options(options)[:request_id]
+        ).not_to eq('fake-request-id')
+      end
+    end
+  end
+
+  describe "DiskInfo" do
+    context "when instance_type is STANDARD_A0" do
+      context "when instance_type is lowercase" do
+        it "should return correct values" do
+          disk_info = Bosh::AzureCloud::Helpers::DiskInfo.for('STANDARD_A0')
+
+          expect(disk_info.size).to eq(30)
+          expect(disk_info.count).to eq(1)
+        end
+      end
+
+      context "when instance_type is uppercase" do
+        it "should return correct values" do
+          disk_info = Bosh::AzureCloud::Helpers::DiskInfo.for('standard_a0')
+
+          expect(disk_info.size).to eq(30)
+          expect(disk_info.count).to eq(1)
+        end
+      end
+    end
+
+    context "when instance_type is STANDARD_D15_V2" do
+      it "should return correct values" do
+        disk_info = Bosh::AzureCloud::Helpers::DiskInfo.for('STANDARD_D15_V2')
+
+        expect(disk_info.size).to eq(1023)
+        expect(disk_info.count).to eq(40)
+      end
+    end
+
+    context "when instance_type is unknown" do
+      it "should return correct values" do
+        disk_info = Bosh::AzureCloud::Helpers::DiskInfo.for('unknown')
+
+        expect(disk_info.size).to eq(30)
+        expect(disk_info.count).to eq(64)
+      end
+    end
+  end
+
+  describe "StemcellInfo" do
+    context "when metadata is not empty" do
+      context "but metadata does not contain image" do
+        let(:uri) { "fake-uri" }
+        let(:metadata) {
+          {
+            "name" => "fake-name",
+            "version" => "fake-version",
+            "infrastructure" => "azure",
+            "hypervisor" => "hyperv",
+            "disk" => "3072",
+            "disk_format" => "vhd",
+            "container_format" => "bare",
+            "os_type" => "linux",
+            "os_distro" => "ubuntu",
+            "architecture" => "x86_64",
+          }
+        }
+
+        it "should return correct values" do
+          stemcell_info = Bosh::AzureCloud::Helpers::StemcellInfo.new(uri, metadata)
+          expect(stemcell_info.uri).to eq("fake-uri")
+          expect(stemcell_info.os_type).to eq("linux")
+          expect(stemcell_info.name).to eq("fake-name")
+          expect(stemcell_info.version).to eq("fake-version")
+          expect(stemcell_info.disk_size).to eq(3072)
+          expect(stemcell_info.is_light_stemcell?).to be(false)
+          expect(stemcell_info.image_reference).to be(nil)
+        end
+      end
+
+      context "when metadata contains image" do
+        context "and image is a hash" do
+          let(:uri) { "fake-uri" }
+          let(:metadata) {
+            {
+              "name" => "fake-name",
+              "version" => "fake-version",
+              "infrastructure" => "azure",
+              "hypervisor" => "hyperv",
+              "disk" => "3072",
+              "disk_format" => "vhd",
+              "container_format" => "bare",
+              "os_type" => "linux",
+              "os_distro" => "ubuntu",
+              "architecture" => "x86_64",
+              "image" => "{\"publisher\"=>\"bosh\", \"offer\"=>\"UbuntuServer\", \"sku\"=>\"trusty\", \"version\"=>\"fake-version\"}"
+            }
+          }
+
+          it "should return correct values" do
+            stemcell_info = Bosh::AzureCloud::Helpers::StemcellInfo.new(uri, metadata)
+            expect(stemcell_info.uri).to eq("fake-uri")
+            expect(stemcell_info.os_type).to eq("linux")
+            expect(stemcell_info.name).to eq("fake-name")
+            expect(stemcell_info.version).to eq("fake-version")
+            expect(stemcell_info.disk_size).to eq(3072)
+            expect(stemcell_info.is_light_stemcell?).to be(true)
+            expect(stemcell_info.image_reference['publisher']).to eq('bosh')
+            expect(stemcell_info.image_reference['offer']).to eq('UbuntuServer')
+            expect(stemcell_info.image_reference['sku']).to eq('trusty')
+            expect(stemcell_info.image_reference['version']).to eq('fake-version')
+          end
+        end
+
+        context "and image is a string" do
+          let(:uri) { "fake-uri" }
+          let(:metadata) {
+            {
+              "name" => "fake-name",
+              "version" => "fake-version",
+              "infrastructure" => "azure",
+              "hypervisor" => "hyperv",
+              "disk" => "3072",
+              "disk_format" => "vhd",
+              "container_format" => "bare",
+              "os_type" => "linux",
+              "os_distro" => "ubuntu",
+              "architecture" => "x86_64",
+              "image" => {"publisher"=>"bosh", "offer"=>"UbuntuServer", "sku"=>"trusty", "version"=>"fake-version"}
+            }
+          }
+
+          it "should return correct values" do
+            stemcell_info = Bosh::AzureCloud::Helpers::StemcellInfo.new(uri, metadata)
+            expect(stemcell_info.uri).to eq("fake-uri")
+            expect(stemcell_info.os_type).to eq("linux")
+            expect(stemcell_info.name).to eq("fake-name")
+            expect(stemcell_info.version).to eq("fake-version")
+            expect(stemcell_info.disk_size).to eq(3072)
+            expect(stemcell_info.is_light_stemcell?).to be(true)
+            expect(stemcell_info.image_reference['publisher']).to eq('bosh')
+            expect(stemcell_info.image_reference['offer']).to eq('UbuntuServer')
+            expect(stemcell_info.image_reference['sku']).to eq('trusty')
+            expect(stemcell_info.image_reference['version']).to eq('fake-version')
+          end
+        end
+      end
+    end
+
+    context "when metadata is empty" do
+      let(:uri) { "fake-uri" }
+      let(:metadata) { {} }
+      it "should return correct values" do
+        stemcell_info = Bosh::AzureCloud::Helpers::StemcellInfo.new(uri, metadata)
+        expect(stemcell_info.uri).to eq("fake-uri")
+        expect(stemcell_info.os_type).to eq('linux')
+        expect(stemcell_info.name).to be(nil)
+        expect(stemcell_info.version).to be(nil)
+        expect(stemcell_info.disk_size).to eq(3072)
+      end
+    end
+  end
+
+  describe "FileMutex" do
+    let(:logger) { Logger.new('/dev/null') }
+    let(:file_path) { "/tmp/lock#{SecureRandom.uuid}" }
+
+    context "when the lock does not exist" do
+      it "should get the lock" do
+        mutex = Bosh::AzureCloud::Helpers::FileMutex.new(file_path, logger, 5)
+        expect {
+          mutex.synchronize do
+            sleep(1)
+          end
+        }.not_to raise_error
+      end
+    end
+    
+    context "when the lock exists and timeouts" do
+      before do
+        File.open(file_path, "w") {|f| f.write("test") }
+      end
+
+      after do
+        File.delete(file_path)
+      end
+
+      it "should timeout" do
+        mutex = Bosh::AzureCloud::Helpers::FileMutex.new(file_path, logger, 5)
+        expect {
+          mutex.synchronize do
+            sleep(1)
+          end
+        }.to raise_error(/timeout/)
+      end
+    end
+    
+    context "when the lock exists initially and is released before timeout" do
+      before do
+        File.open(file_path, "w") {|f| f.write("test") }
+      end
+
+      after do
+        File.delete(file_path) if File.exists?(file_path)
+      end
+
+      it "should not timeout and continue" do
+        mutex = Bosh::AzureCloud::Helpers::FileMutex.new(file_path, logger, 5)
+        unlock = Thread.new{
+          sleep(2)
+          logger.info('The lock is released')
+          File.delete(file_path)
+        }
+        expect {
+          mutex.synchronize do
+            sleep(1)
+          end
+        }.not_to raise_error
+        unlock.join()
+      end
+    end
+  end
+
+  describe "#has_light_stemcell_property?" do
+    context "with 'image'" do
+      let(:stemcell_properties) {
+        {
+          'image' => 'fake-image'
+        }
+      }
+
+      it "should return true" do
+        expect(
+          helpers_tester.has_light_stemcell_property?(stemcell_properties)
+        ).to be(true)
+      end
+    end
+
+    context "without 'image'" do
+      let(:stemcell_properties) {
+        {
+          'a' => 'b'
+        }
+      }
+
+      it "should return false" do
+        expect(
+          helpers_tester.has_light_stemcell_property?(stemcell_properties)
+        ).to be(false)
+      end
+    end
+  end
+
+  describe "#is_light_stemcell_id?" do
+    context "when stemcell is light" do
+      let(:stemcell_id) { 'bosh-light-stemcell-xxx' }
+
+      it "should return true" do
+        expect(
+          helpers_tester.is_light_stemcell_id?(stemcell_id)
+        ).to be(true)
+      end
+    end
+
+    context "when stemcell is heavy" do
+      let(:stemcell_id) { 'bosh-stemcell-xxx' }
+
+      it "should return false" do
+        expect(
+          helpers_tester.is_light_stemcell_id?(stemcell_id)
+        ).to be(false)
+       end
+     end
+   end
+
+   describe "#generate_unique_id" do
+    context "when expected id length is long enough" do
+      let (:length) { 20 }
+
+      it "should return the uniq string" do
+        expect(helpers_tester.generate_unique_id(length)).to be_a(String)
+        expect(helpers_tester.generate_unique_id(length).length).to eq(length)
+      end
+    end
+
+    context "when expected id length is too short" do
+      let (:length) { 8 }
+
+      it "should return string with the expected length" do
+        expect(helpers_tester.generate_unique_id(length).length).to eq(length)
       end
     end
   end

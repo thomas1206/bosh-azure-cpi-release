@@ -17,11 +17,13 @@ require 'vhd'
 require 'thread'
 require 'open3'
 require 'etc'
+require 'fcntl'
 # Use resolv-replace.rb to replace the libc resolver
 # Reference:
 #  https://makandracards.com/ninjaconcept/30815-fixing-socketerror-getaddrinfo-name-or-service-not-known-with-ruby-s-resolv-replace-rb
 #  http://www.subelsky.com/2014/05/fixing-socketerror-getaddrinfo-name-or.html
 require "resolv-replace.rb"
+require 'net/http'
 
 require 'common/exec'
 require 'common/thread_pool'
@@ -45,8 +47,14 @@ require 'cloud/azure/blob_manager'
 require 'cloud/azure/disk_manager'
 require 'cloud/azure/stemcell_manager'
 require 'cloud/azure/table_manager'
+require 'cloud/azure/light_stemcell_manager'
 
-require 'azure'
+require 'cloud/azure/disk_manager2'
+require 'cloud/azure/stemcell_manager2'
+require 'cloud/azure/storage_account_manager'
+
+require 'azure/storage'
+require 'azure/core/http/debug_filter'
 
 module Bosh
   module Clouds
