@@ -686,7 +686,150 @@ describe Bosh::AzureCloud::AzureClient2 do
         end
       end
 
+      context "when image_reference is not nil" do
+        let(:image_reference) {
+          {
+            'publisher'    => 'p',
+            'offer'        => 'q',
+            'sku'          => 'r',
+            'version'      => 's'
+          }
+        }
+
+        let(:vm_params) {
+          {
+            :name           => vm_name,
+            :location       => "b",
+            :tags           => { "foo" => "bar"},
+            :vm_size        => "c",
+            :ssh_username   => "d",
+            :ssh_cert_data  => "e",
+            :custom_data    => "f",
+            :image_uri      => "g",
+            :os_disk        => {
+              :disk_name     => "h",
+              :disk_uri      => "i",
+              :disk_caching  => "j",
+              :disk_size     => "k",
+            },
+            :ephemeral_disk => {
+              :disk_name     => "l",
+              :disk_uri      => "m",
+              :disk_caching  => "n",
+              :disk_size     => "o",
+            },
+            :os_type        => "linux",
+            :managed        => false,     # true or false doen't matter in this case
+            :image_reference => image_reference
+          }
+        }
+
+        let(:request_body) {
+          {
+            :name     => vm_name,
+            :location => "b",
+            :type     => "Microsoft.Compute/virtualMachines",
+            :tags     => {
+              :foo => "bar"
+            },
+            :properties => {
+              :hardwareProfile => {
+                :vmSize => "c"
+              },
+              :osProfile => {
+                :customData => "f",
+                :computerName => vm_name,
+                :adminUsername => "d",
+                :linuxConfiguration => {
+                  :disablePasswordAuthentication => "true",
+                  :ssh => {
+                    :publicKeys => [
+                      {
+                        :path => "/home/d/.ssh/authorized_keys",
+                        :keyData => "e"
+                      }
+                    ]
+                  }
+                }
+              },
+              :networkProfile => {
+                :networkInterfaces => [
+                  {
+                    :id => "a",
+                    :properties => {
+                      :primary => true
+                    }
+                  },
+                  {
+                    :id => "b",
+                    :properties => {
+                      :primary => false
+                    }
+                  }
+                ]
+              },
+              :storageProfile => {
+                :imageReference => image_reference,
+                :osDisk => {
+                  :name => "h",
+                  :osType => "linux",
+                  :createOption => "FromImage",
+                  :caching => "j",
+                  :vhd => {
+                    :uri => "i"
+                  },
+                  :diskSizeGB => "k"
+                },
+                :dataDisks => [
+                  {
+                    :name => "l",
+                    :lun  => 0,
+                    :createOption => "Empty",
+                    :diskSizeGB => "o",
+                    :vhd => {
+                      :uri => "m"
+                    },
+                    :caching => "n"
+                  }
+                ]
+              }
+            },
+            :plan => {
+              :name => image_reference['sku'],
+              :publisher => image_reference['publisher'],
+              :product => image_reference['offer']
+            }
+          }
+        }
+
+        it "should raise no error" do
+          stub_request(:post, token_uri).to_return(
+            :status => 200,
+            :body => {
+              "access_token" => valid_access_token,
+              "expires_on" => expires_on
+            }.to_json,
+            :headers => {})
+          stub_request(:put, vm_uri).with(body: request_body).to_return(
+            :status => 200,
+            :body => '',
+            :headers => {
+              "azure-asyncoperation" => operation_status_link
+            })
+          stub_request(:get, operation_status_link).to_return(
+            :status => 200,
+            :body => '{"status":"Succeeded"}',
+            :headers => {})
+
+          expect {
+            azure_client2.create_virtual_machine(vm_params, network_interfaces)
+          }.not_to raise_error
+        end
+      end
+
       context "when os_type is windows" do
+        let(:logger_strio) { StringIO.new }
+        let(:windows_password) { 'THISISWINDOWSCREDENTIAL' }
         let(:vm_params) do
           {
             :name               => vm_name,
@@ -694,7 +837,7 @@ describe Bosh::AzureCloud::AzureClient2 do
             :tags               => { "foo" => "bar"},
             :vm_size            => "c",
             :windows_username   => "d",
-            :windows_password   => "e",
+            :windows_password   => windows_password,
             :custom_data        => "f",
             :image_uri          => "g",
             :os_disk            => {
@@ -724,7 +867,10 @@ describe Bosh::AzureCloud::AzureClient2 do
                 :customData => "f",
                 :computerName => vm_name,
                 :adminUsername => "d",
-                :adminPassword => "e"
+                :adminPassword => windows_password,
+                :windowsConfiguration => {
+                  :enableAutomaticUpdates => false
+                }
               },
               :networkProfile => {
                 :networkInterfaces => [
@@ -761,28 +907,80 @@ describe Bosh::AzureCloud::AzureClient2 do
           }
         }
 
-        it "should raise no error" do
-          stub_request(:post, token_uri).to_return(
-            :status => 200,
-            :body => {
-              "access_token" => valid_access_token,
-              "expires_on" => expires_on
-            }.to_json,
-            :headers => {})
-          stub_request(:put, vm_uri).with(body: request_body).to_return(
-            :status => 200,
-            :body => '',
-            :headers => {
-              "azure-asyncoperation" => operation_status_link
-            })
-          stub_request(:get, operation_status_link).to_return(
-            :status => 200,
-            :body => '{"status":"Succeeded"}',
-            :headers => {})
+        context "redact credentials in logs" do
+          let(:azure_client2) {
+            Bosh::AzureCloud::AzureClient2.new(
+              mock_cloud_options["properties"]["azure"],
+              Logger.new(logger_strio)
+            )
+          }
 
-          expect {
-            azure_client2.create_virtual_machine(vm_params, network_interfaces)
-          }.not_to raise_error
+          it "should raise no error" do
+            stub_request(:post, token_uri).to_return(
+              :status => 200,
+              :body => {
+                "access_token" => valid_access_token,
+                "expires_on" => expires_on
+              }.to_json,
+              :headers => {})
+            stub_request(:put, vm_uri).with(body: request_body).to_return(
+              :status => 200,
+              :body => '',
+              :headers => {
+                "azure-asyncoperation" => operation_status_link
+              })
+            stub_request(:get, operation_status_link).to_return(
+              :status => 200,
+              :body => '{"status":"Succeeded"}',
+              :headers => {})
+
+            expect {
+              azure_client2.create_virtual_machine(vm_params, network_interfaces)
+            }.not_to raise_error
+
+            logs = logger_strio.string
+            expect(logs.include?(windows_password)).to be(false)
+            expect(logs.include?(MOCK_AZURE_CLIENT_SECRET)).to be(false)
+            expect(logs.scan('<redacted>').count).to eq(2)
+          end
+        end
+
+        context "do not redact credentials in logs" do
+          let(:azure_client2) {
+            Bosh::AzureCloud::AzureClient2.new(
+              mock_cloud_options["properties"]["azure"].merge({ 'debug_mode' => true }),
+              Logger.new(logger_strio)
+            )
+          }
+
+          it "should raise no error" do
+            stub_request(:post, token_uri).to_return(
+              :status => 200,
+              :body => {
+                "access_token" => valid_access_token,
+                "expires_on" => expires_on
+              }.to_json,
+              :headers => {})
+            stub_request(:put, vm_uri).with(body: request_body).to_return(
+              :status => 200,
+              :body => '',
+              :headers => {
+                "azure-asyncoperation" => operation_status_link
+              })
+            stub_request(:get, operation_status_link).to_return(
+              :status => 200,
+              :body => '{"status":"Succeeded"}',
+              :headers => {})
+
+            expect {
+              azure_client2.create_virtual_machine(vm_params, network_interfaces)
+            }.not_to raise_error
+
+            logs = logger_strio.string
+            expect(logs.include?(windows_password)).to be(true)
+            expect(logs.include?(MOCK_AZURE_CLIENT_SECRET)).to be(true)
+            expect(logs.include?('<redacted>')).to be(false)
+          end
         end
       end
 
@@ -1110,7 +1308,7 @@ describe Bosh::AzureCloud::AzureClient2 do
 
         expect {
           azure_client2.create_virtual_machine(vm_params, network_interfaces)
-        }.to raise_error /check_completion - http code: 404/
+        }.to raise_error { |error| expect(error.error).to match(/check_completion - http code: 404/) }
       end
 
       it "should raise an error if create operation failed" do
@@ -1134,7 +1332,7 @@ describe Bosh::AzureCloud::AzureClient2 do
 
         expect {
           azure_client2.create_virtual_machine(vm_params, network_interfaces)
-        }.to raise_error /status: Cancelled/
+        }.to raise_error { |error| expect(error.status).to eq('Cancelled') }
       end
     end
 

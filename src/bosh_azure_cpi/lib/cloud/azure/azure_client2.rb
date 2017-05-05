@@ -9,6 +9,14 @@ module Bosh::AzureCloud
   class AzureConflictError < AzureError; end
   class AzureInternalError < AzureError; end
   class AzureAsynInternalError < AzureError; end
+  class AzureAsynchronousError < AzureError
+    attr_accessor :status, :error
+
+    def initialize(status = nil, error = nil)
+      @status = status
+      @error = error
+    end
+  end
 
   class AzureClient2
     include Helpers
@@ -48,6 +56,9 @@ module Bosh::AzureCloud
 
     REST_API_PROVIDER_STORAGE            = 'Microsoft.Storage'
     REST_API_STORAGE_ACCOUNTS            = 'storageAccounts'
+
+    # Please add the key into this list if you want to redact its value in request body.
+    CREDENTIAL_KEYWORD_LIST = ['adminPassword', 'client_secret']
 
     def initialize(azure_properties, logger)
       @logger = logger
@@ -203,6 +214,9 @@ module Bosh::AzureCloud
         when 'windows'
           os_profile['adminUsername'] = vm_params[:windows_username]
           os_profile['adminPassword'] = vm_params[:windows_password]
+          os_profile['windowsConfiguration'] = {
+            'enableAutomaticUpdates' => false
+          }
         else
           raise ArgumentError, "Unsupported os type: #{vm_params[:os_type]}"
       end
@@ -277,6 +291,12 @@ module Bosh::AzureCloud
         vm['properties']['storageProfile'] = {
           'imageReference' => vm_params[:image_reference],
           'osDisk'         => os_disk
+        }
+
+        vm['plan'] = {
+          'name' => vm_params[:image_reference]['sku'],
+          'publisher' => vm_params[:image_reference]['publisher'],
+          'product' => vm_params[:image_reference]['offer']
         }
       end
 
@@ -931,21 +951,23 @@ module Bosh::AzureCloud
     # Network/Public IP
 
     # Create a public IP
-    # @param [String] name       - Name of public IP.
-    # @param [String] location   - Location where the public IP will be created.
-    # @param [Boolean] is_static - Whether the IP address is static or dynamic.
+    # @param [String] name                     - Name of public IP.
+    # @param [String] location                 - Location where the public IP will be created.
+    # @param [Boolean] is_static               - Whether the IP address is static or dynamic.
+    # @param [Integer] idle_timeout_in_minutes - Timeout for the TCP idle connection. The value can be set between 4 and 30 minutes.
     #
     # @return [Boolean]
     #
     # @See https://docs.microsoft.com/en-us/rest/api/network/create-or-update-a-public-ip-address
     #
-    def create_public_ip(name, location, is_static = true)
+    def create_public_ip(name, location, is_static = true, idle_timeout_in_minutes = 4)
       url = rest_api_url(REST_API_PROVIDER_NETWORK, REST_API_NETWORK_PUBLIC_IP_ADDRESSES, name: name)
       public_ip = {
         'name'       => name,
         'location'   => location,
         'properties' => {
-          'publicIPAllocationMethod' => is_static ? 'Static' : 'Dynamic'
+          'publicIPAllocationMethod' => is_static ? 'Static' : 'Dynamic',
+          'idleTimeoutInMinutes'     => idle_timeout_in_minutes
         }
       }
       http_put(url, public_ip)
@@ -1389,37 +1411,63 @@ module Bosh::AzureCloud
       request_body = storage_account.to_json
       request.body = request_body
       request['Content-Length'] = request_body.size
-      @logger.debug("create_storage_account - request body:\n#{request.body}")
+      @logger.debug("create_storage_account - request body:\n#{redact_credentials_in_request_body(storage_account)}")
 
-      retry_after = 10
-      response = http_get_response(uri, request, retry_after)
-      if response.code.to_i == HTTP_CODE_OK
-        return true
-      elsif response.code.to_i != HTTP_CODE_ACCEPTED
-        raise AzureError, "create_storage_account - Cannot create the storage account \"#{name}\". http code: #{response.code}. Error message: #{response.body}"
-      end
-
-      @logger.debug("create_storage_account - storage asynchronous operation: #{response['Location']}")
-      uri = URI(response['Location'])
-      api_version = get_api_version(@azure_properties, AZURE_RESOURCE_PROVIDER_STORAGE)
-      request = Net::HTTP::Get.new(uri.request_uri)
-      request.add_field('x-ms-version', api_version)
-      while true
-        retry_after = response['Retry-After'].to_i if response.key?('Retry-After')
-        sleep(retry_after)
-
-        @logger.debug("create_storage_account - trying to get the status of asynchronous operation: #{uri}")
-        response = http_get_response(uri, request, retry_after, true)
-
-        status_code = response.code.to_i
-        if status_code == HTTP_CODE_OK
+      retry_count = 0
+      begin
+        retry_after = 10
+        response = http_get_response(uri, request, retry_after)
+        if response.code.to_i == HTTP_CODE_OK
           return true
-        elsif status_code == HTTP_CODE_INTERNALSERVERERROR
-          error = "create_storage_account - http code: #{response.code}. Error message: #{response.body}"
-          @logger.warn(error)
-        elsif status_code != HTTP_CODE_ACCEPTED
-          raise AzureError, "create_storage_account - http code: #{response.code}. Error message: #{response.body}"
+        elsif response.code.to_i != HTTP_CODE_ACCEPTED
+          raise AzureError, "create_storage_account - Cannot create the storage account \"#{name}\". http code: #{response.code}. Error message: #{response.body}"
         end
+
+        @logger.debug("create_storage_account - storage asynchronous operation: #{response['Location']}")
+        uri = URI(response['Location'])
+        api_version = get_api_version(@azure_properties, AZURE_RESOURCE_PROVIDER_STORAGE)
+        request = Net::HTTP::Get.new(uri.request_uri)
+        request.add_field('x-ms-version', api_version)
+        while true
+          retry_after = response['Retry-After'].to_i if response.key?('Retry-After')
+          sleep(retry_after)
+
+          @logger.debug("create_storage_account - trying to get the status of asynchronous operation: #{uri}")
+          response = http_get_response(uri, request, retry_after)
+
+          status_code = response.code.to_i
+          if status_code == HTTP_CODE_OK
+            # Need to check status in response body for asynchronous operation even if status_code is HTTP_CODE_OK.
+            # Ignore exception if the body of the response is not JSON format
+            ignore_exception do
+              result = JSON(response.body)
+              if result['status'] == PROVISIONING_STATE_FAILED
+                error = "create_storage_account - http code: #{response.code}\n"
+                error += get_http_common_headers(response)
+                error += "Error message: #{response.body}"
+                if response.key?('Retry-After')
+                  retry_after = response['Retry-After'].to_i
+                  @logger.warn("create_storage_account - Fail for an AzureAsynInternalError. Will retry after #{retry_after} seconds.")
+                  sleep(retry_after)
+                  raise AzureAsynInternalError, error
+                end
+                raise AzureAsynchronousError.new(result['status'], result['error']), error
+              end
+            end
+            return true
+          elsif status_code == HTTP_CODE_INTERNALSERVERERROR
+            error = "create_storage_account - http code: #{response.code}. Error message: #{response.body}"
+            @logger.warn(error)
+          elsif status_code != HTTP_CODE_ACCEPTED
+            raise AzureAsynchronousError.new(nil, "create_storage_account - http code: #{response.code}. Error message: #{response.body}")
+          end
+        end
+      rescue AzureAsynInternalError => e
+        if retry_count < AZURE_MAX_RETRY_COUNT
+          retry_count += 1
+          retry
+        end
+        raise e
       end
     end
 
@@ -1674,10 +1722,18 @@ module Bosh::AzureCloud
     end
 
     def filter_credential_in_logs(uri)
-      if uri.request_uri.include?('/listKeys')
+      if !is_debug_mode(@azure_properties) && uri.request_uri.include?('/listKeys')
         return true
       end
       false
+    end
+
+    def redact_credentials(keys, hash)
+      Hash[hash.map { |k,v| [k, v.kind_of?(Hash) ? redact_credentials(keys, v) : (keys.include?(k) ? '<redacted>' : v) ] }]
+    end
+
+    def redact_credentials_in_request_body(body)
+      is_debug_mode(@azure_properties) ? body.to_json : redact_credentials(CREDENTIAL_KEYWORD_LIST, body).to_json
     end
 
     def http(uri)
@@ -1721,6 +1777,7 @@ module Bosh::AzureCloud
           request.body = URI.encode_www_form(params)
           @logger.debug("get_token - request.header:")
           request.each_header { |k,v| @logger.debug("\t#{k} = #{v}") }
+          @logger.debug("get_token - request body:\n#{redact_credentials_in_request_body(params)}")
 
           response = http(uri).request(request)
         rescue Net::OpenTimeout, Net::ReadTimeout, Errno::ECONNRESET => e
@@ -1785,7 +1842,7 @@ module Bosh::AzureCloud
       uri
     end
 
-    def http_get_response(uri, request, retry_after, is_async = false)
+    def http_get_response(uri, request, retry_after)
       response = nil
       refresh_token = false
       retry_count = 0
@@ -1815,17 +1872,7 @@ module Bosh::AzureCloud
           raise AzureUnauthorizedError, "http_get_response - Azure authentication failed: Token is invalid. Error message: #{response.body}"
         end
         refresh_token = false
-        if status_code == HTTP_CODE_OK && is_async
-          # Need to check status in response body for asynchronous operation even if status_code is HTTP_CODE_OK.
-          result = JSON(response.body)
-          if result['status'] == 'Failed'
-            error = "http_get_response - http code: #{response.code}\n"
-            error += get_http_common_headers(response)
-            error += "Error message: #{response.body}"
-            raise AzureAsynInternalError, error if response.key?('Retry-After')
-            raise AzureError, error
-          end
-        elsif AZURE_RETRY_ERROR_CODES.include?(status_code)
+        if AZURE_RETRY_ERROR_CODES.include?(status_code)
           error = "http_get_response - http code: #{response.code}\n"
           error += get_http_common_headers(response)
           error += "Error message: #{response.body}"
@@ -1836,10 +1883,6 @@ module Bosh::AzureCloud
           refresh_token = true
           retry
         end
-        raise e
-      rescue AzureAsynInternalError => e
-        @logger.warn("http_get_response - Fail for an AzureAsynInternalError. Will retry after #{retry_after} seconds.")
-        sleep(retry_after)
         raise e
       rescue AzureInternalError, Net::OpenTimeout, Net::ReadTimeout, Errno::ECONNRESET => e
         if retry_count < AZURE_MAX_RETRY_COUNT
@@ -1896,34 +1939,42 @@ module Bosh::AzureCloud
       request = Net::HTTP::Get.new(uri.request_uri)
       uri.query = URI.encode_www_form(params)
       request.add_field('x-ms-version', options[:api_version])
+
       while true
         retry_after = response['Retry-After'].to_i if response.key?('Retry-After')
         sleep(retry_after)
 
         @logger.debug("check_completion - trying to get the status of asynchronous operation: #{uri}")
-        response = http_get_response(uri, request, retry_after, true)
+        response = http_get_response(uri, request, retry_after)
         status_code = response.code.to_i
         if status_code != HTTP_CODE_OK && status_code != HTTP_CODE_ACCEPTED
-          raise AzureError, "check_completion - http code: #{response.code}. Error message: #{response.body}"
+          raise AzureAsynchronousError.new(nil, "check_completion - http code: #{response.code}. Error message: #{response.body}")
         end
 
-        unless response.body.nil?
-          ret = JSON(response.body)
-          unless ret['status'].nil?
-            if ret['status'] != PROVISIONING_STATE_INPROGRESS
-              if ret['status'] == PROVISIONING_STATE_SUCCEEDED
-                return true
-              else
-                error = "status: #{ret['status']}\n"
-                error += "http code: #{status_code}\n"
-                error += get_http_common_headers(response)
-                error += "error:\n#{ret['error']}"
-                raise AzureError, error
-              end
-            else
-              @logger.debug("check_completion - InProgress...")
-            end
+        raise AzureAsynchronousError.new(nil, 'The body of the asynchronous response is empty') if response.body.nil?
+        result = JSON(response.body)
+        if result['status'].nil?
+          raise AzureAsynchronousError.new(nil, "The body of the asynchronous response does not contain `status'. Response: #{response.body}")
+        end
+
+        status = result['status']
+        if status == PROVISIONING_STATE_SUCCEEDED
+          return true
+        elsif status == PROVISIONING_STATE_INPROGRESS
+          @logger.debug("check_completion - InProgress...")
+        else
+          error = "check_completion - http code: #{response.code}\n"
+          error += get_http_common_headers(response)
+          error += "Error message: #{response.body}"
+
+          if status == PROVISIONING_STATE_FAILED && status_code == HTTP_CODE_OK && response.key?('Retry-After')
+            retry_after = response['Retry-After'].to_i
+            @logger.warn("check_completion - #{options[:operation]} fails for an AzureAsynInternalError. Will retry after #{retry_after} seconds.")
+            sleep(retry_after)
+            raise AzureAsynInternalError, error
           end
+
+          raise AzureAsynchronousError.new(status, error)
         end
       end
     end
@@ -1960,7 +2011,7 @@ module Bosh::AzureCloud
           request_body = body.to_json
           request.body = request_body
           request['Content-Length'] = request_body.size
-          @logger.debug("http_put - request body:\n#{request.body}")
+          @logger.debug("http_put - request body:\n#{redact_credentials_in_request_body(body)}")
         end
 
         response = http_get_response(uri, request, retry_after)
@@ -1993,7 +2044,7 @@ module Bosh::AzureCloud
           request_body = body.to_json
           request.body = request_body
           request['Content-Length'] = request_body.size
-          @logger.debug("http_patch - request body:\n#{request.body}")
+          @logger.debug("http_patch - request body:\n#{redact_credentials_in_request_body(body)}")
         end
 
         response = http_get_response(uri, request, retry_after)
@@ -2053,7 +2104,7 @@ module Bosh::AzureCloud
           request_body = body.to_json
           request.body = request_body
           request['Content-Length'] = request_body.size
-          @logger.debug("http_put - request body:\n#{request.body}")
+          @logger.debug("http_put - request body:\n#{redact_credentials_in_request_body(body)}")
         end
         response = http_get_response(uri, request, retry_after)
         options = {

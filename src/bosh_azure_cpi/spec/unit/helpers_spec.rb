@@ -489,6 +489,16 @@ describe Bosh::AzureCloud::Helpers do
         }.to raise_error "Azure CPI maximum disk size is 1023 GiB"
       end
     end
+
+    context "disk size is a correct value" do
+      let(:disk_size) { 30 * 1024 }
+
+      it "should not raise an error" do
+        expect {
+          helpers_tester.validate_disk_size(disk_size)
+        }.not_to raise_error
+      end
+    end
   end
 
   describe "#is_debug_mode" do
@@ -617,70 +627,35 @@ describe Bosh::AzureCloud::Helpers do
       end
 
       context "when metadata contains image" do
-        context "and image is a hash" do
-          let(:uri) { "fake-uri" }
-          let(:metadata) {
-            {
-              "name" => "fake-name",
-              "version" => "fake-version",
-              "infrastructure" => "azure",
-              "hypervisor" => "hyperv",
-              "disk" => "3072",
-              "disk_format" => "vhd",
-              "container_format" => "bare",
-              "os_type" => "linux",
-              "os_distro" => "ubuntu",
-              "architecture" => "x86_64",
-              "image" => "{\"publisher\"=>\"bosh\", \"offer\"=>\"UbuntuServer\", \"sku\"=>\"trusty\", \"version\"=>\"fake-version\"}"
-            }
+        let(:uri) { "fake-uri" }
+        let(:metadata) {
+          {
+            "name" => "fake-name",
+            "version" => "fake-version",
+            "infrastructure" => "azure",
+            "hypervisor" => "hyperv",
+            "disk" => "3072",
+            "disk_format" => "vhd",
+            "container_format" => "bare",
+            "os_type" => "linux",
+            "os_distro" => "ubuntu",
+            "architecture" => "x86_64",
+            "image" => {"publisher"=>"bosh", "offer"=>"UbuntuServer", "sku"=>"trusty", "version"=>"fake-version"}
           }
+        }
 
-          it "should return correct values" do
-            stemcell_info = Bosh::AzureCloud::Helpers::StemcellInfo.new(uri, metadata)
-            expect(stemcell_info.uri).to eq("fake-uri")
-            expect(stemcell_info.os_type).to eq("linux")
-            expect(stemcell_info.name).to eq("fake-name")
-            expect(stemcell_info.version).to eq("fake-version")
-            expect(stemcell_info.disk_size).to eq(3072)
-            expect(stemcell_info.is_light_stemcell?).to be(true)
-            expect(stemcell_info.image_reference['publisher']).to eq('bosh')
-            expect(stemcell_info.image_reference['offer']).to eq('UbuntuServer')
-            expect(stemcell_info.image_reference['sku']).to eq('trusty')
-            expect(stemcell_info.image_reference['version']).to eq('fake-version')
-          end
-        end
-
-        context "and image is a string" do
-          let(:uri) { "fake-uri" }
-          let(:metadata) {
-            {
-              "name" => "fake-name",
-              "version" => "fake-version",
-              "infrastructure" => "azure",
-              "hypervisor" => "hyperv",
-              "disk" => "3072",
-              "disk_format" => "vhd",
-              "container_format" => "bare",
-              "os_type" => "linux",
-              "os_distro" => "ubuntu",
-              "architecture" => "x86_64",
-              "image" => {"publisher"=>"bosh", "offer"=>"UbuntuServer", "sku"=>"trusty", "version"=>"fake-version"}
-            }
-          }
-
-          it "should return correct values" do
-            stemcell_info = Bosh::AzureCloud::Helpers::StemcellInfo.new(uri, metadata)
-            expect(stemcell_info.uri).to eq("fake-uri")
-            expect(stemcell_info.os_type).to eq("linux")
-            expect(stemcell_info.name).to eq("fake-name")
-            expect(stemcell_info.version).to eq("fake-version")
-            expect(stemcell_info.disk_size).to eq(3072)
-            expect(stemcell_info.is_light_stemcell?).to be(true)
-            expect(stemcell_info.image_reference['publisher']).to eq('bosh')
-            expect(stemcell_info.image_reference['offer']).to eq('UbuntuServer')
-            expect(stemcell_info.image_reference['sku']).to eq('trusty')
-            expect(stemcell_info.image_reference['version']).to eq('fake-version')
-          end
+        it "should return correct values" do
+          stemcell_info = Bosh::AzureCloud::Helpers::StemcellInfo.new(uri, metadata)
+          expect(stemcell_info.uri).to eq("fake-uri")
+          expect(stemcell_info.os_type).to eq("linux")
+          expect(stemcell_info.name).to eq("fake-name")
+          expect(stemcell_info.version).to eq("fake-version")
+          expect(stemcell_info.disk_size).to eq(3072)
+          expect(stemcell_info.is_light_stemcell?).to be(true)
+          expect(stemcell_info.image_reference['publisher']).to eq('bosh')
+          expect(stemcell_info.image_reference['offer']).to eq('UbuntuServer')
+          expect(stemcell_info.image_reference['sku']).to eq('trusty')
+          expect(stemcell_info.image_reference['version']).to eq('fake-version')
         end
       end
     end
@@ -811,21 +786,74 @@ describe Bosh::AzureCloud::Helpers do
      end
    end
 
-   describe "#generate_unique_id" do
-    context "when expected id length is long enough" do
-      let (:length) { 20 }
+   describe "#generate_windows_computer_name" do
+    let(:process) { class_double(Process).as_stubbed_const }
 
-      it "should return the uniq string" do
-        expect(helpers_tester.generate_unique_id(length)).to be_a(String)
-        expect(helpers_tester.generate_unique_id(length).length).to eq(length)
+    context "when generated raw string is shorter than expect length" do
+      before do
+        expect_any_instance_of(Time).to receive(:to_f).and_return(1482829740.3734238) #1482829740.3734238 -> 'd5e883lv66u'
+        expect(process).to receive(:pid).and_return(6)                                #6 -> '6'
+      end
+
+      it "should return string padded with '0' for raw string to make its length eq WINDOWS_VM_NAME_LENGTH" do
+        computer_name = helpers_tester.generate_windows_computer_name
+        expect(computer_name).to eq('d5e883lv66u0006')
+        expect(computer_name.length).to eq(WINDOWS_VM_NAME_LENGTH)
       end
     end
 
-    context "when expected id length is too short" do
-      let (:length) { 8 }
+    context "when generated raw string is longer than expect length" do
+      before do
+        expect_any_instance_of(Time).to receive(:to_f).and_return(1482829740.3734238) #1482829740.3734238 -> 'd5e883lv66u'
+        expect(process).to receive(:pid).and_return(6553600)                          #6553600 -> '68000'
+      end
 
-      it "should return string with the expected length" do
-        expect(helpers_tester.generate_unique_id(length).length).to eq(length)
+      it "should get tail of the string to make its length eq WINDOWS_VM_NAME_LENGTH" do
+        computer_name = helpers_tester.generate_windows_computer_name
+        expect(computer_name).to eq('5e883lv66u68000')
+        expect(computer_name.length).to eq(WINDOWS_VM_NAME_LENGTH)
+      end
+    end
+  end
+
+  describe "#validate_idle_timeout" do
+    context "idle_timeout_in_minutes is not an integer" do
+      let(:idle_timeout_in_minutes) { "fake-idle-timeout" }
+
+      it "should raise an error" do
+        expect {
+          helpers_tester.validate_idle_timeout(idle_timeout_in_minutes)
+        }.to raise_error "idle_timeout_in_minutes needs to be an integer"
+      end
+    end
+
+    context "idle_timeout_in_minutes is smaller than 4 minutes" do
+      let(:idle_timeout_in_minutes) { 3 }
+
+      it "should raise an error" do
+        expect {
+          helpers_tester.validate_idle_timeout(idle_timeout_in_minutes)
+        }.to raise_error "Minimum idle_timeout_in_minutes is 4 minutes"
+      end
+    end
+
+    context "idle_timeout_in_minutes is larger than 30 minutes" do
+      let(:idle_timeout_in_minutes) { 31 }
+
+      it "should raise an error" do
+        expect {
+          helpers_tester.validate_idle_timeout(idle_timeout_in_minutes)
+        }.to raise_error "Maximum idle_timeout_in_minutes is 30 minutes"
+      end
+    end
+
+    context "idle_timeout_in_minutes is a correct value" do
+      let(:idle_timeout_in_minutes) { 20 }
+
+      it "should not raise an error" do
+        expect {
+          helpers_tester.validate_idle_timeout(idle_timeout_in_minutes)
+        }.not_to raise_error
       end
     end
   end
